@@ -9,6 +9,16 @@ import { User, Cipher, Folder, Attachment } from '../types';
 export class StorageService {
   constructor(private db: D1Database) {}
 
+  /**
+   * D1 .bind() throws on `undefined` values. This helper converts every
+   * `undefined` in the argument list to `null` so we never hit that runtime
+   * error — especially important after the opaque-passthrough change where
+   * client-supplied JSON may omit fields we later reference as columns.
+   */
+  private safeBind(stmt: D1PreparedStatement, ...values: any[]): D1PreparedStatement {
+    return stmt.bind(...values.map(v => v === undefined ? null : v));
+  }
+
   private async sha256Hex(input: string): Promise<string> {
     const bytes = new TextEncoder().encode(input);
     const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -229,58 +239,54 @@ CREATE INDEX IF NOT EXISTS idx_api_rate_window ON api_rate_limits(window_start);
 
   async saveUser(user: User): Promise<void> {
     const email = user.email.toLowerCase();
-    await this.db
-      .prepare(
-        'INSERT INTO users(id, email, name, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, created_at, updated_at) ' +
-        'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(id) DO UPDATE SET ' +
-        'email=excluded.email, name=excluded.name, master_password_hash=excluded.master_password_hash, key=excluded.key, private_key=excluded.private_key, public_key=excluded.public_key, ' +
-        'kdf_type=excluded.kdf_type, kdf_iterations=excluded.kdf_iterations, kdf_memory=excluded.kdf_memory, kdf_parallelism=excluded.kdf_parallelism, security_stamp=excluded.security_stamp, updated_at=excluded.updated_at'
-      )
-      .bind(
-        user.id,
-        email,
-        user.name,
-        user.masterPasswordHash,
-        user.key,
-        user.privateKey,
-        user.publicKey,
-        user.kdfType,
-        user.kdfIterations,
-        user.kdfMemory ?? null,
-        user.kdfParallelism ?? null,
-        user.securityStamp,
-        user.createdAt,
-        user.updatedAt
-      )
-      .run();
+    const stmt = this.db.prepare(
+      'INSERT INTO users(id, email, name, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, created_at, updated_at) ' +
+      'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET ' +
+      'email=excluded.email, name=excluded.name, master_password_hash=excluded.master_password_hash, key=excluded.key, private_key=excluded.private_key, public_key=excluded.public_key, ' +
+      'kdf_type=excluded.kdf_type, kdf_iterations=excluded.kdf_iterations, kdf_memory=excluded.kdf_memory, kdf_parallelism=excluded.kdf_parallelism, security_stamp=excluded.security_stamp, updated_at=excluded.updated_at'
+    );
+    await this.safeBind(stmt,
+      user.id,
+      email,
+      user.name,
+      user.masterPasswordHash,
+      user.key,
+      user.privateKey,
+      user.publicKey,
+      user.kdfType,
+      user.kdfIterations,
+      user.kdfMemory,
+      user.kdfParallelism,
+      user.securityStamp,
+      user.createdAt,
+      user.updatedAt
+    ).run();
   }
 
   async createFirstUser(user: User): Promise<boolean> {
     const email = user.email.toLowerCase();
-    const result = await this.db
-      .prepare(
-        'INSERT INTO users(id, email, name, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, created_at, updated_at) ' +
-        'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ' +
-        'WHERE NOT EXISTS (SELECT 1 FROM users LIMIT 1)'
-      )
-      .bind(
-        user.id,
-        email,
-        user.name,
-        user.masterPasswordHash,
-        user.key,
-        user.privateKey,
-        user.publicKey,
-        user.kdfType,
-        user.kdfIterations,
-        user.kdfMemory ?? null,
-        user.kdfParallelism ?? null,
-        user.securityStamp,
-        user.createdAt,
-        user.updatedAt
-      )
-      .run();
+    const stmt = this.db.prepare(
+      'INSERT INTO users(id, email, name, master_password_hash, key, private_key, public_key, kdf_type, kdf_iterations, kdf_memory, kdf_parallelism, security_stamp, created_at, updated_at) ' +
+      'SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? ' +
+      'WHERE NOT EXISTS (SELECT 1 FROM users LIMIT 1)'
+    );
+    const result = await this.safeBind(stmt,
+      user.id,
+      email,
+      user.name,
+      user.masterPasswordHash,
+      user.key,
+      user.privateKey,
+      user.publicKey,
+      user.kdfType,
+      user.kdfIterations,
+      user.kdfMemory,
+      user.kdfParallelism,
+      user.securityStamp,
+      user.createdAt,
+      user.updatedAt
+    ).run();
 
     return (result.meta.changes ?? 0) > 0;
   }
@@ -294,29 +300,27 @@ CREATE INDEX IF NOT EXISTS idx_api_rate_window ON api_rate_limits(window_start);
 
   async saveCipher(cipher: Cipher): Promise<void> {
     const data = JSON.stringify(cipher);
-    await this.db
-      .prepare(
-        'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, deleted_at) ' +
-        'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(id) DO UPDATE SET ' +
-        'user_id=excluded.user_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at'
-      )
-      .bind(
-        cipher.id,
-        cipher.userId,
-        Number(cipher.type) || 1,
-        cipher.folderId,
-        cipher.name,
-        cipher.notes,
-        cipher.favorite ? 1 : 0,
-        data,
-        cipher.reprompt ?? 0,
-        cipher.key,
-        cipher.createdAt,
-        cipher.updatedAt,
-        cipher.deletedAt
-      )
-      .run();
+    const stmt = this.db.prepare(
+      'INSERT INTO ciphers(id, user_id, type, folder_id, name, notes, favorite, data, reprompt, key, created_at, updated_at, deleted_at) ' +
+      'VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET ' +
+      'user_id=excluded.user_id, type=excluded.type, folder_id=excluded.folder_id, name=excluded.name, notes=excluded.notes, favorite=excluded.favorite, data=excluded.data, reprompt=excluded.reprompt, key=excluded.key, updated_at=excluded.updated_at, deleted_at=excluded.deleted_at'
+    );
+    await this.safeBind(stmt,
+      cipher.id,
+      cipher.userId,
+      Number(cipher.type) || 1,
+      cipher.folderId,
+      cipher.name,
+      cipher.notes,
+      cipher.favorite ? 1 : 0,
+      data,
+      cipher.reprompt ?? 0,
+      cipher.key,
+      cipher.createdAt,
+      cipher.updatedAt,
+      cipher.deletedAt
+    ).run();
   }
 
   async deleteCipher(id: string, userId: string): Promise<void> {
@@ -424,13 +428,11 @@ CREATE INDEX IF NOT EXISTS idx_api_rate_window ON api_rate_limits(window_start);
   }
 
   async saveAttachment(attachment: Attachment): Promise<void> {
-    await this.db
-      .prepare(
-        'INSERT INTO attachments(id, cipher_id, file_name, size, size_name, key) VALUES(?, ?, ?, ?, ?, ?) ' +
-        'ON CONFLICT(id) DO UPDATE SET cipher_id=excluded.cipher_id, file_name=excluded.file_name, size=excluded.size, size_name=excluded.size_name, key=excluded.key'
-      )
-      .bind(attachment.id, attachment.cipherId, attachment.fileName, attachment.size, attachment.sizeName, attachment.key)
-      .run();
+    const stmt = this.db.prepare(
+      'INSERT INTO attachments(id, cipher_id, file_name, size, size_name, key) VALUES(?, ?, ?, ?, ?, ?) ' +
+      'ON CONFLICT(id) DO UPDATE SET cipher_id=excluded.cipher_id, file_name=excluded.file_name, size=excluded.size, size_name=excluded.size_name, key=excluded.key'
+    );
+    await this.safeBind(stmt, attachment.id, attachment.cipherId, attachment.fileName, attachment.size, attachment.sizeName, attachment.key).run();
   }
 
   async deleteAttachment(id: string): Promise<void> {

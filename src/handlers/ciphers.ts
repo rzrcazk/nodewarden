@@ -18,28 +18,24 @@ export function formatAttachments(attachments: Attachment[]): any[] | null {
   }));
 }
 
-// Convert internal cipher to API response format
+// Convert internal cipher to API response format.
+// Uses opaque passthrough: spreads ALL stored fields (including unknown/future ones),
+// then overlays server-computed fields. This ensures new Bitwarden client fields
+// survive a round-trip without code changes.
 export function cipherToResponse(cipher: Cipher, attachments: Attachment[] = []): CipherResponse {
+  // Strip internal-only fields that must not appear in the API response
+  const { userId, createdAt, updatedAt, deletedAt, ...passthrough } = cipher;
+
   return {
-    id: cipher.id,
-    organizationId: null,
-    folderId: cipher.folderId,
+    // Pass through ALL stored cipher fields (known + unknown)
+    ...passthrough,
+    // Server-computed / enforced fields (always override)
     type: Number(cipher.type) || 1,
-    name: cipher.name,
-    notes: cipher.notes,
-    favorite: cipher.favorite,
-    login: cipher.login,
-    card: cipher.card,
-    identity: cipher.identity,
-    secureNote: cipher.secureNote,
-    sshKey: cipher.sshKey,
-    fields: cipher.fields,
-    passwordHistory: cipher.passwordHistory,
-    reprompt: cipher.reprompt,
+    organizationId: null,
     organizationUseTotp: false,
-    creationDate: cipher.createdAt,
-    revisionDate: cipher.updatedAt,
-    deletedDate: cipher.deletedAt,
+    creationDate: createdAt,
+    revisionDate: updatedAt,
+    deletedDate: deletedAt,
     archivedDate: null,
     edit: true,
     viewPassword: true,
@@ -50,7 +46,6 @@ export function cipherToResponse(cipher: Cipher, attachments: Attachment[] = [])
     object: 'cipher',
     collectionIds: [],
     attachments: formatAttachments(attachments),
-    key: cipher.key,
     encryptedFor: null,
   };
 }
@@ -113,23 +108,16 @@ export async function handleCreateCipher(request: Request, env: Env, userId: str
   const cipherData = body.Cipher || body.cipher || body;
 
   const now = new Date().toISOString();
+  // Opaque passthrough: spread ALL client fields to preserve unknown/future ones,
+  // then override only server-controlled fields.
   const cipher: Cipher = {
+    ...cipherData,
+    // Server-controlled fields (always override client values)
     id: generateUUID(),
     userId: userId,
     type: Number(cipherData.type) || 1,
-    folderId: cipherData.folderId || null,
-    name: cipherData.name || null,
-    notes: cipherData.notes || null,
-    favorite: cipherData.favorite || false,
-    login: cipherData.login || null,
-    card: cipherData.card || null,
-    identity: cipherData.identity || null,
-    secureNote: cipherData.secureNote || null,
-    sshKey: cipherData.sshKey || null,
-    fields: cipherData.fields || null,
-    passwordHistory: cipherData.passwordHistory || null,
+    favorite: !!cipherData.favorite,
     reprompt: cipherData.reprompt || 0,
-    key: cipherData.key || null,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,
@@ -161,23 +149,20 @@ export async function handleUpdateCipher(request: Request, env: Env, userId: str
   // Android client sends PascalCase "Cipher" for organization ciphers
   const cipherData = body.Cipher || body.cipher || body;
 
+  // Opaque passthrough: merge existing stored data with ALL incoming client fields.
+  // Unknown/future fields from the client are preserved; server-controlled fields are protected.
   const cipher: Cipher = {
-    ...existingCipher,
+    ...existingCipher,   // start with all existing stored data (including unknowns)
+    ...cipherData,       // overlay all client data (including new/unknown fields)
+    // Server-controlled fields (never from client)
+    id: existingCipher.id,
+    userId: existingCipher.userId,
     type: Number(cipherData.type) || existingCipher.type,
-    folderId: cipherData.folderId !== undefined ? cipherData.folderId : existingCipher.folderId,
-    name: cipherData.name ?? existingCipher.name,
-    notes: cipherData.notes !== undefined ? cipherData.notes : existingCipher.notes,
     favorite: cipherData.favorite ?? existingCipher.favorite,
-    login: cipherData.login !== undefined ? cipherData.login : existingCipher.login,
-    card: cipherData.card !== undefined ? cipherData.card : existingCipher.card,
-    identity: cipherData.identity !== undefined ? cipherData.identity : existingCipher.identity,
-    secureNote: cipherData.secureNote !== undefined ? cipherData.secureNote : existingCipher.secureNote,
-    sshKey: cipherData.sshKey !== undefined ? cipherData.sshKey : existingCipher.sshKey,
-    fields: cipherData.fields !== undefined ? cipherData.fields : existingCipher.fields,
-    passwordHistory: cipherData.passwordHistory !== undefined ? cipherData.passwordHistory : existingCipher.passwordHistory,
     reprompt: cipherData.reprompt ?? existingCipher.reprompt,
-    key: cipherData.key !== undefined ? cipherData.key : existingCipher.key,
+    createdAt: existingCipher.createdAt,
     updatedAt: new Date().toISOString(),
+    deletedAt: existingCipher.deletedAt,
   };
 
   await storage.saveCipher(cipher);

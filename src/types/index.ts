@@ -134,6 +134,8 @@ export interface Cipher {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+  /** Allow unknown fields from Bitwarden clients to be stored and passed through transparently. */
+  [key: string]: any;
 }
 
 // Folder model
@@ -254,6 +256,8 @@ export interface CipherResponse {
   attachments: any[] | null;
   key: string | null;
   encryptedFor: string | null;
+  /** Allow unknown fields to pass through to clients transparently. */
+  [key: string]: any;
 }
 
 export interface CipherPermissions {

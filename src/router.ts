@@ -180,6 +180,18 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     if (isConfigRequest) {
       const origin = url.origin;
       return jsonResponse({
+        // ── Version Strategy (Plan E) ──────────────────────────────────────
+        // Bitwarden clients use this version for backwards-compatibility feature gating.
+        // Confirmed version-gated features (from client source code):
+        //   - Individual cipher key encryption: >= 2024.2.0
+        //     (clients/libs/common/src/vault/services/cipher.service.ts: CIPHER_KEY_ENC_MIN_SERVER_VER)
+        //     (android/.../FeatureFlagManagerImpl.kt: CIPHER_KEY_ENC_MIN_SERVER_VERSION)
+        //   - MasterPasswordUnlockData (mobile): >= 2025.8.0
+        //     (documented in Vaultwarden source comments)
+        // There is NO global minimum version that blocks all client functionality.
+        // Keep this aligned with Vaultwarden's reported version to maintain compatibility.
+        // When Vaultwarden bumps their version, update this value accordingly.
+        // Vaultwarden source: src/api/core/mod.rs → fn config()
         version: '2025.12.0',
         gitHash: 'nodewarden',
         server: null,
@@ -190,8 +202,14 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
           notifications: origin + '/notifications',
           sso: '',
         },
+        // Feature flags control client behavior. Clients use server-provided values;
+        // flags not listed here fall back to DefaultFeatureFlagValue (all false).
+        // Only enable flags for features we actually support.
+        // Reference: clients/libs/common/src/enums/feature-flag.enum.ts
         featureStates: {
           'duo-redirect': true,
+          'email-verification': true,
+          'unauth-ui-refresh': true,
         },
         object: 'config',
       });
@@ -199,7 +217,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
 
     // Version endpoint (some clients probe this to validate the server)
     if (path === '/api/version' && method === 'GET') {
-      return jsonResponse('2025.12.0');
+      return jsonResponse('2025.12.0');  // Keep in sync with config.version above
     }
 
     // Registration endpoint (no auth required, but only works once)
